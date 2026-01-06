@@ -14,6 +14,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/timer/system_timer.h>
 #include <kernel_internal.h> //for z_idle_threads and arch_kernel_init
+#include <zephyr/linker/linker-defs.h>
 
 #include "os_queue.h"
 #include "os_msg.h"
@@ -37,46 +38,68 @@
 
 LOG_MODULE_REGISTER(osif);
 
-#define RAM_DATA_START   DT_REG_ADDR(DT_NODELABEL(ram_data))
-#define RAM_DATA_SIZE    DT_REG_SIZE(DT_NODELABEL(ram_data))
+#define TCM0_START   DT_REG_ADDR(DT_NODELABEL(tcm0))
+#define TCM0_SIZE    DT_REG_SIZE(DT_NODELABEL(tcm0))
 
-#define RAM_CODE_START   DT_REG_ADDR(DT_NODELABEL(ram_code))
-#define RAM_CODE_SIZE    DT_REG_SIZE(DT_NODELABEL(ram_code))
+#define TCM1_START   DT_REG_ADDR(DT_NODELABEL(tcm1))
+#define TCM1_SIZE    DT_REG_SIZE(DT_NODELABEL(tcm1))
 
-#define HEAP_START       DT_REG_ADDR(DT_NODELABEL(heap))
-#define HEAP_SIZE        DT_REG_SIZE(DT_NODELABEL(heap))
+#define TCM_HEAP_START       DT_REG_ADDR(DT_NODELABEL(tcm_heap))
+#define TCM_HEAP_SIZE        DT_REG_SIZE(DT_NODELABEL(tcm_heap))
 
-#define RAM_REGION_START 0x100c00
-#define RAM_REGION_END   0x13cc00
-#define MAX_TOTAL_SIZE   (240 * 1024) // 240KB
+#define TCM_START 0x100c00
+#define TCM_END   0x13cc00
+#define TCM_MAX_SIZE   (240 * 1024)
+
+#define EXTRAM_HEAP_START       DT_REG_ADDR(DT_NODELABEL(ext_data_ram_heap))
+#define EXTRAM_HEAP_SIZE        DT_REG_SIZE(DT_NODELABEL(ext_data_ram_heap))
+
+#define EXTRAM_START       DT_REG_ADDR(DT_NODELABEL(ext_data_ram))
+#define EXTRAM_SIZE        DT_REG_SIZE(DT_NODELABEL(ext_data_ram))
+
+#define EXTRAM_MAX_SIZE   (16 * 1024)
 
 #define END_ADDRESS(start, size) ((start) + (size))
 
-// Assert for RAM Data Region
-BUILD_ASSERT(RAM_DATA_START >= RAM_REGION_START &&
-             END_ADDRESS(RAM_DATA_START, RAM_DATA_SIZE) <= RAM_REGION_END,
-             "RAM Data Region is out of bounds");
+BUILD_ASSERT(EXTRAM_START >= 0x200000 &&
+             END_ADDRESS(EXTRAM_START, EXTRAM_SIZE) <= 0x204000,
+             "EXTRAM Region is out of bounds");
 
-// Assert for RAM Code Region
-BUILD_ASSERT(RAM_CODE_START >= RAM_REGION_START &&
-             END_ADDRESS(RAM_CODE_START, RAM_CODE_SIZE) <= RAM_REGION_END,
-             "RAM Code Region is out of bounds");
+BUILD_ASSERT(EXTRAM_HEAP_START >= 0x200000 &&
+             END_ADDRESS(EXTRAM_HEAP_START, EXTRAM_HEAP_SIZE) <= 0x204000,
+             "EXTRAM_HEAP Region is out of bounds");
 
-// Assert for Heap Region
-BUILD_ASSERT(HEAP_START >= RAM_REGION_START &&
-             END_ADDRESS(HEAP_START, HEAP_SIZE) <= RAM_REGION_END,
-             "Heap Region is out of bounds");
+BUILD_ASSERT(END_ADDRESS(EXTRAM_START, EXTRAM_SIZE) <= EXTRAM_HEAP_START,
+             "EXTRAM end address overlaps with EXTRAM_HEAP start address");
+
+BUILD_ASSERT(EXTRAM_SIZE + EXTRAM_HEAP_SIZE <= EXTRAM_MAX_SIZE,
+             "Total size of EXTRAM & EXTRAM_HEAP regions exceeds 16KB!");
+
+// Assert for TCM0 Region
+BUILD_ASSERT(TCM0_START >= TCM_START &&
+             END_ADDRESS(TCM0_START, TCM0_SIZE) <= TCM_END,
+             "TCM0 Region is out of bounds");
+
+// Assert for TCM1 Region
+BUILD_ASSERT(TCM1_START >= TCM_START &&
+             END_ADDRESS(TCM1_START, TCM1_SIZE) <= TCM_END,
+             "TCM1 Region is out of bounds");
+
+// Assert for TCM_HEAP Region
+BUILD_ASSERT(TCM_HEAP_START >= TCM_START &&
+             END_ADDRESS(TCM_HEAP_START, TCM_HEAP_SIZE) <= TCM_END,
+             "TCM_HEAP Region is out of bounds");
 
 // Assert for Overlap
-BUILD_ASSERT(END_ADDRESS(RAM_DATA_START, RAM_DATA_SIZE) <= RAM_CODE_START,
-             "RAM_DATA end address overlaps with RAM_CODE start address");
+BUILD_ASSERT(END_ADDRESS(TCM0_START, TCM0_SIZE) <= TCM1_START,
+             "TCM0 end address overlaps with TCM1 start address");
 
-BUILD_ASSERT(END_ADDRESS(RAM_CODE_START, RAM_CODE_SIZE) <= HEAP_START,
-             "RAM_CODE end address overlaps with HEAP_START start address");
+BUILD_ASSERT(END_ADDRESS(TCM1_START, TCM1_SIZE) <= TCM_HEAP_START,
+             "TCM1 end address overlaps with TCM_HEAP start address");
 
 // Assert for Total Size
-BUILD_ASSERT(RAM_DATA_SIZE + RAM_CODE_SIZE + HEAP_SIZE <= MAX_TOTAL_SIZE,
-             "Total size of TCM regions exceeds 240KB!");
+BUILD_ASSERT(TCM0_SIZE + TCM1_SIZE + TCM_HEAP_SIZE <= TCM_MAX_SIZE,
+             "Total size of Three regions exceeds 240KB!");
 
 task_sem_item task_sem_array[TASK_SEM_ARRAY_NUMBER] = {0};
 Timer_Info timer_number_array[TIMER_NUMBER_MAX];
@@ -92,7 +115,7 @@ void os_heap_init_zephyr(void)
 {
     // init heap in data on region
     // RAM_TYPE: RAM_TYPE_DATA_ON
-    k_heap_init(&data_on_heap, (void *)HEAP_START, HEAP_SIZE);
+    k_heap_init(&data_on_heap, (void *)TCM_HEAP_START, TCM_HEAP_SIZE);
 
     // init heap in bufferON region
     // RAM_TYPE: RAM_TYPE_BUFFER_ON
@@ -100,7 +123,7 @@ void os_heap_init_zephyr(void)
 
     //  init heap in ext_data_ram region
     // RAM_TYPE: RAM_TYPE_EXT_DATA_SRAM
-    k_heap_init(&ext_data_heap, (void *)EXT_DATA_SRAM_HEAP_ADDR, EXT_DATA_SRAM_HEAP_SIZE);
+    k_heap_init(&ext_data_heap, (void *)EXTRAM_HEAP_START, EXTRAM_HEAP_SIZE);
 }
 
 void os_init_zephyr(void)
@@ -127,7 +150,6 @@ uint64_t os_sys_tick_get_zephyr(void)
     return (uint64_t)sys_clock_tick_get_32();
 }
 
-
 bool os_sched_start_zephyr(void)
 {
     return true;
@@ -135,7 +157,6 @@ bool os_sched_start_zephyr(void)
 
 bool os_sched_stop_zephyr(void)
 {
-//TODO
     return true;
 }
 
@@ -189,12 +210,20 @@ bool os_alloc_secure_ctx_zephyr(uint32_t stack_size)
     return true;
 }
 
+#ifdef CONFIG_BT
 K_THREAD_STACK_DEFINE(lowstack_stack, 768 * 4);
 struct k_thread lowstack_thread_data;
+#endif
 bool os_task_create_zephyr(void **pp_handle, const char *p_name, void (*p_routine)(void *),
                            void *p_param, uint16_t stack_size, uint16_t priority)
 {
     k_tid_t ret_thread_handle;
+
+    if (priority > 6 || priority < 0)
+    {
+        DBG_DIRECT("%s: Invalid priority. Priority is expected to 0 ~ 6.", __func__);
+        return false;
+    }
 
     /* The lowstack thread must be able to preempt all native cooperative threads in Zephyr
     (such as bt tx thread, mesh adv thread, BT Mesh settings workq and so on..).
@@ -207,6 +236,7 @@ bool os_task_create_zephyr(void **pp_handle, const char *p_name, void (*p_routin
     Reference: https://docs.zephyrproject.org/latest/kernel/services/threads/index.html#meta-irq-priorities  */
 
     if (strcmp(p_name, "low_stack_task") == 0)
+#ifdef CONFIG_BT
     {
         ret_thread_handle = k_thread_create(&lowstack_thread_data, lowstack_stack, 768 * 4,
                                             (k_thread_entry_t) p_routine, p_param, NULL, NULL,
@@ -215,6 +245,12 @@ bool os_task_create_zephyr(void **pp_handle, const char *p_name, void (*p_routin
         *pp_handle = &lowstack_thread_data;
         return true;
     }
+#else
+    {
+        DBG_DIRECT("CONFIG_BT not enabled, do not create Lowerstack Task!");
+        return true;
+    }
+#endif
 
     k_tid_t thread_handle;
 
@@ -263,6 +299,11 @@ bool os_task_delete_zephyr(void *p_handle)
     struct k_thread *obj;
 
     obj = (struct k_thread *)p_handle;
+
+    if (obj == NULL)
+    {
+        k_thread_abort(_current);
+    }
 
     k_thread_abort(obj);
     //task signal todo
@@ -336,6 +377,11 @@ bool os_task_priority_get_zephyr(void *p_handle, uint16_t *p_priority)
 bool os_task_priority_set_zephyr(void *p_handle, uint16_t priority)
 {
     struct k_thread *obj;
+    if (priority > 6 || priority < 0)
+    {
+        DBG_DIRECT("%s: Invalid priority. Priority is expected to 0 ~ 6.", __func__);
+        return false;
+    }
     uint16_t switch_priority = CONFIG_REALTEK_OSIF_MAX_TASK_PRIORITY - priority;
 
     if (p_handle != NULL)
@@ -572,9 +618,12 @@ bool os_sem_give_zephyr(void *p_handle)
     }
 
     obj = (struct k_sem *)p_handle;
-
+    if (k_sem_count_get(obj) == obj->limit)
+    {
+        DBG_DIRECT("%s: All tokens have already been released", __func__);
+        return false;
+    }
     k_sem_give(obj);
-
     return true;
 }
 
@@ -914,6 +963,12 @@ void *os_mem_aligned_alloc_intern_zephyr(RAM_TYPE ram_type, size_t size, uint8_t
 /****************************************************************************/
 void os_mem_free_zephyr(void *p_block)
 {
+    if (p_block == NULL)
+    {
+        LOG_ERR("Memory free failed, because it is a NULL pointer.\n");
+        return;
+    }
+
     if (p_block >= (void *)BUFFER_ON_HEAP_ADDR)
     {
         k_heap_free(&buffer_on_heap, p_block);
@@ -922,7 +977,7 @@ void os_mem_free_zephyr(void *p_block)
     {
         k_heap_free(&ext_data_heap, p_block);
     }
-    else if (p_block >= (void *)DT_REG_ADDR(DT_NODELABEL(heap)))
+    else if (p_block >= (void *)DT_REG_ADDR(DT_NODELABEL(tcm_heap)))
     {
         k_heap_free(&data_on_heap, p_block);
     }
@@ -938,6 +993,12 @@ void os_mem_free_zephyr(void *p_block)
 /****************************************************************************/
 void os_mem_aligned_free_zephyr(void *p_block)
 {
+    if (p_block == NULL)
+    {
+        LOG_ERR("Memory aligned free failed, because it is a NULL pointer.\n");
+        return;
+    }
+
     void *p;
 
     memcpy(&p, (uint8_t *)p_block - sizeof(void *), sizeof(void *));
@@ -950,7 +1011,7 @@ void os_mem_aligned_free_zephyr(void *p_block)
     {
         k_heap_free(&ext_data_heap, p);
     }
-    else if (p >= (void *)DT_REG_ADDR(DT_NODELABEL(heap)))
+    else if (p >= (void *)DT_REG_ADDR(DT_NODELABEL(tcm_heap)))
     {
         k_heap_free(&data_on_heap, p);
     }
@@ -974,7 +1035,7 @@ size_t os_mem_peek_zephyr(RAM_TYPE ram_type)
     {
     case RAM_TYPE_DATA_ON:
         sys_heap_runtime_stats_get(&data_on_heap.heap, &stats);
-        heap_size =  DT_REG_SIZE(DT_NODELABEL(heap));
+        heap_size =  DT_REG_SIZE(DT_NODELABEL(tcm_heap));
         break;
     case RAM_TYPE_BUFFER_ON:
         sys_heap_runtime_stats_get(&buffer_on_heap.heap, &stats);
@@ -1184,13 +1245,31 @@ bool os_timer_restart_zephyr(void **pp_handle, uint32_t interval_ms)
 
 bool os_timer_stop_zephyr(void **pp_handle)
 {
-    struct k_timer *timer = *pp_handle;
-    if (timer)
+    if (pp_handle == NULL)
     {
-        k_timer_stop(timer);
-        return true;
+        DBG_DIRECT("%s: timer handle pointer is not declared!", __func__);
+        return false;
     }
-    return false;
+
+    struct k_timer *timer = *pp_handle;
+
+    if (timer == NULL)
+    {
+        DBG_DIRECT("%s: timer handle pointer is NULL! Timer handle pointer address: %x", __func__,
+                   pp_handle);
+        return false;
+    }
+
+    if (k_timer_remaining_get(timer) == 0)
+    {
+        DBG_DIRECT("%s: timer is inactive, cannot stop! Timer handle pointer address: %x", __func__,
+                   pp_handle);
+        return false;
+    }
+
+    k_timer_stop(timer);
+
+    return true;
 }
 
 bool os_timer_delete_zephyr(void **pp_handle)
@@ -1336,7 +1415,6 @@ void os_timer_init_zephyr(void)
 /*dlps restore os kernel scheduler processing                               */
 /****************************************************************************/
 /* from realtek */
-extern void os_pm_restore_tickcount(void);
 extern void os_pm_store_tickcount(void);
 extern PMCheckResult os_pm_check(uint32_t *wakeup_time_diff);
 extern T_OS_QUEUE lpm_excluded_handle[PLATFORM_PM_EXCLUDED_TYPE_MAX];
@@ -1389,7 +1467,7 @@ void os_pm_store_zephyr(void)
 
 void os_pm_restore_zephyr(void)
 {
-    os_pm_restore_tickcount();
+    //os_pm_restore_tickcount();
 
     os_sched_restore_zephyr();
 }
@@ -1496,17 +1574,46 @@ uint32_t os_pm_next_timeout_value_get_zephyr(void)
     }
 
     return timeout_tick_res;
+}
 
+#define RTK_PM_WORKQ_STACK_SIZE 768
+#define RTK_PM_WORKQ_PRIORITY   K_HIGHEST_THREAD_PRIO
+
+K_THREAD_STACK_DEFINE(rtk_pm_workq_stack_area, RTK_PM_WORKQ_STACK_SIZE);
+
+struct k_work_q rtk_pm_workq;
+static struct pend_call pc;
+
+void pendcall_handler(struct k_work *item)
+{
+    struct pend_call *pc = CONTAINER_OF(item, struct pend_call, work);
+    pc->pend_func(pc->para1, pc->para2);
+}
+
+void os_pm_bottom_half_zephyr(void (*pend_func)(void))
+{
+    pc.pend_func = (pend_func_t)pend_func;
+    pc.para1 = NULL;
+    pc.para2 = 0;
+    k_work_init(&pc.work, pendcall_handler);
+    k_work_submit_to_queue(&rtk_pm_workq, &pc.work);
 }
 
 void os_pm_init_zephyr(void)
 {
     power_manager_slave_register_function_to_return(os_pm_return_to_idle_task_zephyr);
 
+    platform_pm_register_schedule_bottom_half_callback_func(os_pm_bottom_half_zephyr);
+
     platform_pm_register_callback_func_with_priority((void *)os_pm_check, PLATFORM_PM_CHECK, 1);
     platform_pm_register_callback_func_with_priority((void *)os_pm_store_zephyr, PLATFORM_PM_STORE, 1);
     platform_pm_register_callback_func_with_priority((void *)os_pm_restore_zephyr, PLATFORM_PM_RESTORE,
                                                      1);
+
+    k_work_queue_init(&rtk_pm_workq);
+    k_work_queue_start(&rtk_pm_workq, rtk_pm_workq_stack_area,
+                       K_THREAD_STACK_SIZEOF(rtk_pm_workq_stack_area), RTK_PM_WORKQ_PRIORITY,
+                       NULL);
     return;
 }
 

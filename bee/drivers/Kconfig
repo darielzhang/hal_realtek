@@ -19,6 +19,8 @@ rsource "codec/Kconfig"
 rsource "qdec/Kconfig"
 rsource "can/Kconfig"
 rsource "spi/Kconfig"
+rsource "spi3w/Kconfig"
+rsource "sdhc/Kconfig"
 rsource "usb/Kconfig"
 rsource "wdt/Kconfig"
 rsource "bluetooth/Kconfig"
@@ -32,3 +34,8 @@ config REALTEK_USING_RTL876X_DRIVER
 	default y
 	depends on SOC_SERIES_RTL8752H
 
+if PM_DEVICE
+config REALTEK_DRIVER_DLPS_CALLBACK_ON_RAM
+	bool "Put driver dlps callback on RAM"
+	default n
+endif
